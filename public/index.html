@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CodeVector - Product Browser</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .container { max-width: 1200px; margin: 0 auto; }
+    .header { text-align: center; color: white; margin-bottom: 40px; }
+    .header h1 { font-size: 2.5rem; margin-bottom: 10px; font-weight: 700; }
+    .header p { font-size: 1.1rem; opacity: 0.9; }
+    .controls { display: flex; gap: 15px; margin-bottom: 30px; flex-wrap: wrap; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); }
+    .control-group { flex: 1; min-width: 200px; }
+    .control-group label { display: block; margin-bottom: 8px; font-weight: 600; color: #333; }
+    .control-group select, .control-group input { width: 100%; padding: 10px 12px; border: 2px solid #e0e0e0; border-radius: 6px; font-size: 1rem; }
+    .control-group select:focus, .control-group input:focus { outline: none; border-color: #667eea; }
+    .button { background: #667eea; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 600; transition: background 0.2s; }
+    .button:hover { background: #5568d3; }
+    .stats { display: flex; gap: 20px; margin-bottom: 20px; color: white; }
+    .products-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; margin-bottom: 40px; }
+    .product-card { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); }
+    .product-card:hover { transform: translateY(-5px); box-shadow: 0 8px 16px rgba(0, 0, 0, 0.15); }
+    .product-name { font-size: 1.1rem; font-weight: 600; color: #333; margin-bottom: 8px; }
+    .product-category { display: inline-block; background: #667eea; color: white; padding: 4px 12px; border-radius: 20px; font-size: 0.85rem; margin-bottom: 12px; }
+    .product-price { font-size: 1.5rem; font-weight: 700; color: #667eea; margin-bottom: 8px; }
+    .load-more { background: #667eea; color: white; border: none; padding: 12px 40px; border-radius: 6px; font-size: 1rem; font-weight: 600; cursor: pointer; }
+    .load-more:hover { background: #5568d3; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🛍️ Product Browser</h1>
+      <p>Browse 200,000+ products with lightning-fast pagination</p>
+    </div>
+    <div class="controls">
+      <div class="control-group">
+        <label for="category">Filter by Category</label>
+        <select id="category">
+          <option value="">All Categories</option>
+        </select>
+      </div>
+      <button class="button" onclick="resetAndLoad()">Reset</button>
+    </div>
+    <div id="error"></div>
+    <div class="stats" id="stats" style="display: none;">
+      <div>📊 Total Products: <strong id="totalCount">-</strong></div>
+      <div>📄 Showing: <strong id="showingCount">-</strong></div>
+    </div>
+    <div class="products-grid" id="products"></div>
+    <div class="pagination" id="pagination" style="display: none;">
+      <button class="load-more" id="loadMoreBtn" onclick="loadMore()">Load More Products</button>
+    </div>
+  </div>
+  <script>
+    let currentCursor = null;
+    let selectedCategory = '';
+    let allProducts = [];
+    const API_URL = '/api/products';
+    async function init() {
+      try {
+        const categoriesRes = await fetch('/api/products/categories');
+        const categoriesData = await categoriesRes.json();
+        const categorySelect = document.getElementById('category');
+        categoriesData.data.forEach(cat => {
+          const option = document.createElement('option');
+          option.value = cat.category;
+          option.textContent = `${cat.category} (${cat.count})`;
+          categorySelect.appendChild(option);
+        });
+        categorySelect.addEventListener('change', (e) => {
+          selectedCategory = e.target.value;
+          resetAndLoad();
+        });
+        await loadMore();
+      } catch (error) {
+        document.getElementById('error').innerHTML = 'Failed to load: ' + error.message;
+      }
+    }
+    async function loadMore() {
+      try {
+        const params = new URLSearchParams({ limit: 20 });
+        if (currentCursor) params.append('after', currentCursor);
+        if (selectedCategory) params.append('category', selectedCategory);
+        const response = await fetch(`${API_URL}?${params}`);
+        const result = await response.json();
+        const { products, pagination } = result.data;
+        if (!currentCursor) {
+          allProducts = products;
+        } else {
+          allProducts = allProducts.concat(products);
+        }
+        currentCursor = pagination.nextCursor;
+        const productsContainer = document.getElementById('products');
+        products.forEach(product => {
+          const card = document.createElement('div');
+          card.className = 'product-card';
+          card.innerHTML = `<div class="product-name">${product.name}</div><div class="product-category">${product.category}</div><div class="product-price">₹${parseFloat(product.price).toFixed(2)}</div>`;
+          productsContainer.appendChild(card);
+        });
+        if (pagination.hasMore) {
+          document.getElementById('pagination').style.display = 'block';
+        }
+      } catch (error) {
+        document.getElementById('error').innerHTML = 'Error: ' + error.message;
+      }
+    }
+    function resetAndLoad() {
+      currentCursor = null;
+      allProducts = [];
+      document.getElementById('products').innerHTML = '';
+      loadMore();
+    }
+    document.addEventListener('DOMContentLoaded', init);
+  </script>
+</body>
+</html>
