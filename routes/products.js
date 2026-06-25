@@ -6,28 +6,19 @@ const router = express.Router();
 /**
  * GET /products
  * 
- * Cursor-based pagination endpoint that handles concurrent updates correctly.
+ * Compound cursor-based pagination that handles concurrent updates correctly.
+ * Sorts by updated_at DESC (newest first), then id DESC as tiebreaker.
  * 
  * Query parameters:
- * - after: cursor ID to fetch products after (for pagination)
+ * - after: cursor in format "TIMESTAMP_ID" (e.g., "2026-06-25T14:20:31Z_1234")
  * - category: filter by category
  * - limit: number of products to return (default: 20, max: 100)
- * 
- * Response: { products: [...], nextCursor: "...", hasMore: true }
- * 
- * WHY CURSOR-BASED?
- * - Offset-based pagination (OFFSET/LIMIT) breaks when data changes
- * - If 50 new products are added while browsing, you might see duplicates or miss products
- * - Cursor-based uses ID position, which stays consistent even during concurrent updates
  */
 router.get('/', async (req, res) => {
   try {
     const { after, category, limit = 20 } = req.query;
-
-    // Validate limit
     const queryLimit = Math.min(Math.max(parseInt(limit) || 20, 1), 100);
 
-    // Build the query
     let query = 'SELECT id, name, category, price, created_at, updated_at FROM products WHERE 1=1';
     const params = [];
     let paramCount = 1;
@@ -39,19 +30,24 @@ router.get('/', async (req, res) => {
       paramCount++;
     }
 
-    // Apply cursor: fetch products with ID less than the cursor
-    // This ensures even if new products are added, you won't see duplicates
+    // Parse compound cursor if provided (format: "TIMESTAMP_ID")
     if (after) {
-      const afterId = parseInt(after);
-      if (!isNaN(afterId)) {
-        query += ` AND id < $${paramCount}`;
-        params.push(afterId);
-        paramCount++;
+      const parts = after.split('_');
+      if (parts.length === 2) {
+        const cursorUpdatedAt = parts[0];
+        const cursorId = parseInt(parts[1]);
+        
+        if (!isNaN(cursorId)) {
+          // Compound cursor: (updated_at, id) < (cursor_updated_at, cursor_id)
+          query += ` AND (updated_at, id) < ($${paramCount}, $${paramCount + 1})`;
+          params.push(cursorUpdatedAt, cursorId);
+          paramCount += 2;
+        }
       }
     }
 
-    // Order by ID descending (newest/highest IDs first) and get one extra to check hasMore
-    query += ` ORDER BY id DESC LIMIT $${paramCount}`;
+    // Sort by updated_at DESC (newest first), then id DESC as tiebreaker
+    query += ` ORDER BY updated_at DESC, id DESC LIMIT $${paramCount}`;
     params.push(queryLimit + 1);
 
     const result = await pool.query(query, params);
@@ -61,12 +57,12 @@ router.get('/', async (req, res) => {
     const hasMore = rows.length > queryLimit;
     const products = rows.slice(0, queryLimit);
 
-    // The next cursor is the ID of the last product in this batch
+    // Create next cursor: "TIMESTAMP_ID"
     const nextCursor = products.length > 0 
-      ? products[products.length - 1].id.toString()
+      ? `${products[products.length - 1].updated_at.toISOString()}_${products[products.length - 1].id}`
       : null;
 
-    // Get total count for stats (optional, can be slow for 200k+ records)
+    // Get total count
     let totalCount = null;
     if (!after && !category) {
       const countResult = await pool.query('SELECT COUNT(*) as count FROM products');
@@ -83,7 +79,7 @@ router.get('/', async (req, res) => {
           limit: queryLimit,
           returned: products.length
         },
-        totalCount // Only included on first request (no after, no category)
+        totalCount
       }
     });
 
@@ -99,8 +95,6 @@ router.get('/', async (req, res) => {
 
 /**
  * GET /products/categories
- * 
- * Get all available categories with product count
  */
 router.get('/categories', async (req, res) => {
   try {
@@ -127,8 +121,6 @@ router.get('/categories', async (req, res) => {
 
 /**
  * GET /products/:id
- * 
- * Get a single product by ID
  */
 router.get('/:id', async (req, res) => {
   try {
